@@ -130,3 +130,7 @@ dmypy.json
 
 # PyCharm project settings
 .idea/
+
+# example data
+data/
+
