@@ -54,10 +54,21 @@ class Group(ElementWithAttributes):
 
     def __getitem__(self, item):
 
-        try:
-            node = self.tree[item]
-        except KeyError:
+        if item not in self.tree:
+            rsplit = item.rsplit('/', maxsplit=1)
+            if len(rsplit) == 1:
+                item_0 = self.tree.root
+                key = rsplit[0]
+            else:
+                item_0, key = rsplit
+            if item_0 in self.tree:
+                node = self.tree[item_0]
+                if isinstance(node.data, ElementWithAttributes) and key in node.data.attrs:
+                    return node.data.attrs[key]  # ### RETURN attribute value ###
+
             raise KeyError(f'{item} is not a valid key')
+
+        node = self.tree[item]
 
         if isinstance(node.data, Group):
             # rebuild tree with reduced identifiers
@@ -67,12 +78,12 @@ class Group(ElementWithAttributes):
                     parent = None
                 else:
                     parent = n.predecessor(stree.identifier).split(item, maxsplit=1)[1]
-                node.data.tree.create_node(n.tag, n.identifier.split(item, maxsplit=1)[1], parent)
+                node.data.tree.create_node(n.tag, n.identifier.split(item, maxsplit=1)[1], parent, data=n.data)
 
         elif isinstance(node.data, DataSet):
             if node.data.df.empty:
                 if self.path is None:
-                    raise GroupError(f'{item} is not loaded yet and this is not linked to a File or Group')
+                    raise GroupError(f'{item} is not loaded yet and this element is not linked to a File or Group')
                 node.data.df = pd.read_parquet(self.path / item / DATA_FILE)
 
         return node.data
@@ -102,16 +113,16 @@ class File(Group):
         self.mode = mode
         self.type = DATA_DIR_TYPES.FILE
 
-        if not (self.path / DDIR_FILE).exists():
-            raise ValueError(f'{path} is not a DataDir!')
-        else:
+        self.tree.create_node('.', '.', None, data=self)
+
+        if mode in list('ar'):
+            # some checking
+            if not (self.path / DDIR_FILE).exists():
+                raise ValueError(f'{path} is not a DataDir!')
             d = json.load((self.path / DDIR_FILE).open())
             if d['ddir']['type'] != DATA_DIR_TYPES.FILE:
                 raise ValueError(f'{path} is not the root of the DataDir')
 
-        self.tree.create_node('.', '.', None, data=self)
-
-        if mode in list('ar'):
             # get the tree and the attributes of the nodes
             ls = sorted([i.relative_to(p).parent for i in self.path.glob('**/ddir.json')])
             ls[0] = Path('')
@@ -133,6 +144,14 @@ class File(Group):
                 if isinstance(data, ElementWithAttributes):
                     data.set_attrs(json.load((path / item / ATTRIBUTES_FILE).open()))
                 self.tree.create_node(item.name, str(item), str(parent), data=data)
+
+        elif mode == 'w':
+            if self.path.exists():
+                raise ValueError(f'{path} already exists')
+            if (self.path / DDIR_FILE).exists():
+                raise ValueError(f'{path} contains already a data dir')
+
+            _write_ddir_json(self.path, DATA_DIR_TYPES.FILE)
 
 
 class DataSet(ElementWithAttributes):
@@ -165,6 +184,8 @@ if __name__ == '__main__':
     dd = File(p)
     dd.tree.show()
     gr_vent = dd['vent']
+    dt = gr_vent['dT']
+    print(f'Sample time: {dt}')
     ds_vent = dd['vent/signals']
     df_vent = ds_vent.df
     print(df_vent.info())
