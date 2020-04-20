@@ -90,8 +90,30 @@ class Group(ElementWithAttributes):
 
     def __setitem__(self, key, value):
 
+        if self.mode not in list('aw'):
+            raise ValueError(f'DataDir is read only - no setting allowed')
+
+        if key in self.tree:
+            raise KeyError(f'{key} already exists')
+
+        rsplit = key.rsplit('/', maxsplit=1)
+        if len(rsplit) == 1:
+            item_0 = self.tree.root
+            key_1 = rsplit[0]
+        else:
+            item_0, key_1 = rsplit
+
+        if item_0 not in self.tree:
+            raise KeyError(f'Parent key {item_0} does not exist')
+
         if isinstance(value, Group):
-            pass
+            new_tree = Tree()
+            for node in value.tree.all_nodes_itr():
+                new_tree.create_node(node.tag, key + '/' + node.identifier, parent=node.parent, data=node.data)
+            value.tree = new_tree
+            self.tree.create_node(tag=key_1, identifier=key, parent=item_0, data=value)
+            self.tree.paste(key, new_tree)
+
         elif isinstance(value, DataSet):
             pass
         elif isinstance(value, Raw):
@@ -100,6 +122,10 @@ class Group(ElementWithAttributes):
             pass
         else:
             raise ValueError(f'{value} is not a valid type for DataDir')
+
+        # write attributes to file if self is linked
+        if isinstance(value, ElementWithAttributes) and self.path is not None:
+            json.dump(value.attrs, (self.path / key / ATTRIBUTES_FILE).open('w'), indent=4)
 
     def link(self, path):
         self.path = path
