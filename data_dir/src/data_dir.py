@@ -200,8 +200,8 @@ class Attribute(object):
         self.type = None
 
 
-def _write_ddir_json(path, type: DataDirTypes):
-    d = {'type': type, 'version': __version__}
+def _write_ddir_json(path, dd_type: str):
+    d = {'type': dd_type, 'version': __version__}
     json.dump(d, (path / DDIR_FILE).open('w'), indent=4)
 
 
