@@ -37,7 +37,18 @@ class GroupError(Error):
 class ElementWithAttributes(object):
 
     def __init__(self):
-        self.attrs: Dict = {}
+        self._attrs: Dict = {}
+
+    @property
+    def attrs(self):
+        return self._attrs
+
+    @attrs.setter
+    def attrs(self, value: Dict):
+        if isinstance(value, Dict):
+            self._attrs = value
+        else:
+            raise ValueError(f'Type of attributes must be Dict not {type(value)}')
 
     def set_attrs(self, attrs: Dict):
         self.attrs = attrs
@@ -90,9 +101,6 @@ class Group(ElementWithAttributes):
 
     def __setitem__(self, key, value):
 
-        if self.mode not in list('aw'):
-            raise ValueError(f'DataDir is read only - no setting allowed')
-
         if key in self.tree:
             raise KeyError(f'{key} already exists')
 
@@ -103,19 +111,29 @@ class Group(ElementWithAttributes):
         else:
             item_0, key_1 = rsplit
 
-        if item_0 not in self.tree:
+        if item_0 is not None and item_0 not in self.tree:
             raise KeyError(f'Parent key {item_0} does not exist')
 
+        dd_type = None
         if isinstance(value, Group):
+            dd_type = value.type
             new_tree = Tree()
             for node in value.tree.all_nodes_itr():
-                new_tree.create_node(node.tag, key + '/' + node.identifier, parent=node.parent, data=node.data)
-            value.tree = new_tree
+                if node.parent is None:
+                    parent = None
+                else:
+                    parent = key + '/' + node.parent
+                new_tree.create_node(node.tag, key + '/' + node.identifier, parent=parent, data=node.data)
+                value.tree = new_tree
             self.tree.create_node(tag=key_1, identifier=key, parent=item_0, data=value)
             self.tree.paste(key, new_tree)
 
         elif isinstance(value, DataSet):
-            pass
+            dd_type = DATA_DIR_TYPES.DATASET
+            self.tree.create_node(tag=key_1, identifier=key, parent=item_0, data=value)
+            if self.path is not None:
+                value.df.to_parquet(self.path / key / DATA_FILE)
+
         elif isinstance(value, Raw):
             pass
         elif isinstance(value, Attribute):
@@ -123,8 +141,10 @@ class Group(ElementWithAttributes):
         else:
             raise ValueError(f'{value} is not a valid type for DataDir')
 
-        # write attributes to file if self is linked
+        # write ddir and attributes file if self is linked
         if isinstance(value, ElementWithAttributes) and self.path is not None:
+            (self.path / key).mkdir()
+            _write_ddir_json(self.path / key, dd_type=dd_type)
             json.dump(value.attrs, (self.path / key / ATTRIBUTES_FILE).open('w'), indent=4)
 
     def link(self, path):
@@ -139,7 +159,6 @@ class File(Group):
         self.mode = mode
         self.type = DATA_DIR_TYPES.FILE
 
-        self.tree.create_node('.', '.', None, data=self)
 
         if mode in list('ar'):
             # some checking
@@ -151,16 +170,20 @@ class File(Group):
 
             # get the tree and the attributes of the nodes
             ls = sorted([i.relative_to(p).parent for i in self.path.glob('**/ddir.json')])
-            ls[0] = Path('')
             parent = None
-            self.set_attrs(json.load((self.path / ATTRIBUTES_FILE).open()))
+            self.attrs = json.load((self.path / ATTRIBUTES_FILE).open())
 
-            for item in ls[1:]:
-                if item.parent != parent:
-                    parent = item.parent
+            for item in ls:
+                if str(item.parent) != parent:
+                    if item == Path(''):
+                        parent = None
+                    else:
+                        parent = str(item.parent)
                 dtype = json.load((path / item / DDIR_FILE).open())['ddir']['type']
                 data = None
-                if dtype == DATA_DIR_TYPES.GROUP:
+                if dtype == DATA_DIR_TYPES.FILE:
+                    data = self
+                elif dtype == DATA_DIR_TYPES.GROUP:
                     data = Group()
                     data.link(self.path)
                 elif dtype == DATA_DIR_TYPES.DATASET:
@@ -168,16 +191,23 @@ class File(Group):
                 elif dtype == DATA_DIR_TYPES.RAW:
                     data = Raw()
                 if isinstance(data, ElementWithAttributes):
-                    data.set_attrs(json.load((path / item / ATTRIBUTES_FILE).open()))
-                self.tree.create_node(item.name, str(item), str(parent), data=data)
+                    data.attrs = json.load((path / item / ATTRIBUTES_FILE).open())
+                self.tree.create_node(item.name, str(item), parent, data=data)
 
         elif mode == 'w':
             if self.path.exists():
                 raise ValueError(f'{path} already exists')
             if (self.path / DDIR_FILE).exists():
                 raise ValueError(f'{path} contains already a data dir')
+            self['.'] = self
+            # _write_ddir_json(self.path, DATA_DIR_TYPES.FILE)
 
-            _write_ddir_json(self.path, DATA_DIR_TYPES.FILE)
+    def __setitem__(self, key, value):
+
+        if self.mode not in list('aw'):
+            raise ValueError(f'DataDir is read only - no setting allowed')
+
+        super(File, self).__setitem__(key, value)
 
 
 class DataSet(ElementWithAttributes):
@@ -201,17 +231,22 @@ class Attribute(object):
 
 
 def _write_ddir_json(path, dd_type: str):
-    d = {'type': dd_type, 'version': __version__}
+    d = {'ddir': {'type': dd_type, 'version': __version__}}
     json.dump(d, (path / DDIR_FILE).open('w'), indent=4)
 
 
 if __name__ == '__main__':
-    p = Path('../../data/example_ddir')
-    dd = File(p)
+    # p = Path('../../data/example_ddir')
+    # dd = File(p)
+    # dd.tree.show()
+    # gr_vent = dd['vent']
+    # dt = gr_vent['dT']
+    # print(f'Sample time: {dt}')
+    # ds_vent = dd['vent/signals']
+    # df_vent = ds_vent.df
+    # print(df_vent.info())
+
+    p = Path('../../data/temp.dd')
+    dd = File(p, 'w')
+    dd['test'] = Group()
     dd.tree.show()
-    gr_vent = dd['vent']
-    dt = gr_vent['dT']
-    print(f'Sample time: {dt}')
-    ds_vent = dd['vent/signals']
-    df_vent = ds_vent.df
-    print(df_vent.info())
